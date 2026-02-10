@@ -33,31 +33,61 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        // Get initial session
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            setSession(session);
-            setUser(session?.user ?? null);
-            setLoading(false);
-        }).catch((err) => {
-            console.error("Error getting session:", err);
-            setLoading(false);
-        });
+        let isMounted = true;
+        let timeoutId: NodeJS.Timeout;
+
+        // Timeout after 5 seconds to prevent hanging
+        const initializeAuth = async () => {
+            try {
+                // Set timeout to prevent hanging if Supabase is unavailable
+                timeoutId = setTimeout(() => {
+                    if (isMounted) {
+                        console.warn("Auth initialization timeout - Supabase credentials may be missing or invalid");
+                        setLoading(false);
+                    }
+                }, 5000);
+
+                // Get initial session
+                const { data: { session } } = await supabase.auth.getSession();
+                
+                if (isMounted) {
+                    clearTimeout(timeoutId);
+                    setSession(session);
+                    setUser(session?.user ?? null);
+                    setLoading(false);
+                }
+            } catch (err) {
+                console.error("Error getting session:", err);
+                if (isMounted) {
+                    clearTimeout(timeoutId);
+                    setLoading(false);
+                }
+            }
+        };
+
+        initializeAuth();
 
         // Listen for auth changes
         const { data: { subscription } } = supabase.auth.onAuthStateChange(
             async (event, session) => {
-                setSession(session);
-                setUser(session?.user ?? null);
-                setLoading(false);
+                if (isMounted) {
+                    setSession(session);
+                    setUser(session?.user ?? null);
+                    setLoading(false);
 
-                // Create user profile on first sign up
-                if (event === 'SIGNED_IN' && session?.user) {
-                    await ensureUserProfile(session.user);
+                    // Create user profile on first sign up
+                    if (event === 'SIGNED_IN' && session?.user) {
+                        await ensureUserProfile(session.user);
+                    }
                 }
             }
         );
 
-        return () => subscription.unsubscribe();
+        return () => {
+            isMounted = false;
+            clearTimeout(timeoutId);
+            subscription.unsubscribe();
+        };
     }, []);
 
     // Ensure user has a profile in the users table
